@@ -1,5 +1,5 @@
 ---
-- name: Setup Multi-Mode Digital Voice Reflector with D-STAR and Protocol Bridge
+- name: Setup Multi-Mode Digital Voice Reflector with Protocol Bridging
   hosts: all
   become: yes
   vars:
@@ -11,21 +11,56 @@
     bm_master: "3102"  # Replace with your Brandmeister master server
 
   tasks:
-    - name: Update and upgrade system
-      apt:
-        update_cache: yes
-        upgrade: dist
+    - name: Detect package manager
+      ansible.builtin.shell: |
+        if [ -x "$(command -v yum)" ]; then
+          echo "yum"
+        elif [ -x "$(command -v dnf)" ]; then
+          echo "dnf"
+        elif [ -x "$(command -v apt)" ]; then
+          echo "apt"
+        else
+          echo "unsupported"
+        fi
+      register: package_manager
+      changed_when: false
 
-    - name: Install necessary packages
+    - name: Fail if unsupported package manager is detected
+      fail:
+        msg: "Unsupported package manager detected."
+      when: package_manager.stdout == "unsupported"
+
+    - name: Install packages for APT-based systems
       apt:
         name:
           - nginx
-          - python-certbot-nginx
+          - python3-certbot-nginx
           - git
           - build-essential
           - libftdi1-dev
           - wget
         state: present
+      when: package_manager.stdout == "apt"
+
+    - name: Install packages for RPM-based systems
+      yum:
+        name:
+          - nginx
+          - python3-certbot-nginx
+          - git
+          - gcc
+          - gcc-c++
+          - make
+          - libftdi-devel
+          - wget
+        state: present
+      when: package_manager.stdout in ["yum", "dnf"]
+
+    - name: Start and enable nginx service
+      service:
+        name: nginx
+        state: started
+        enabled: true
 
     - name: Clone Multi-Reflector Installer
       git:
@@ -106,14 +141,28 @@
           FilePath=.
           FileRoot=YSF2DMR
 
-    - name: Link D-STAR and AMBE transcoding
-      copy:
-        dest: "/etc/init.d/xlxd"
-        content: |
-          ARGUMENTS="XLX{{ xlx_number }} {{ reflector_ip }} 127.0.0.1"
-        mode: "0755"
-
     - name: Setup firewall rules
+      firewalld:
+        port: "{{ item.port }}"
+        protocol: "{{ item.proto }}"
+        zone: public
+        permanent: true
+        state: enabled
+      with_items:
+        - { port: 22, proto: tcp }
+        - { port: 80, proto: tcp }
+        - { port: 443, proto: tcp }
+        - { port: 10001, proto: udp }
+        - { port: 10100:10199, proto: udp }
+        - { port: 30001, proto: udp }
+        - { port: 20001, proto: udp }
+        - { port: 30051, proto: udp }
+        - { port: 62030, proto: udp }
+        - { port: 8880, proto: udp }
+        - { port: 42000, proto: udp }
+      when: package_manager.stdout in ["yum", "dnf"]
+
+    - name: Setup firewall rules for APT-based systems
       ufw:
         rule: allow
         port: "{{ item.port }}"
@@ -130,6 +179,7 @@
         - { port: 62030, proto: udp }
         - { port: 8880, proto: udp }
         - { port: 42000, proto: udp }
+      when: package_manager.stdout == "apt"
 
     - name: Obtain SSL certificate
       command: >
