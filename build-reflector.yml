@@ -1,5 +1,5 @@
 ---
-- name: Setup Multi-Mode Digital Voice Reflector
+- name: Setup Multi-Mode Digital Voice Reflector with D-STAR and Protocol Bridge
   hosts: all
   become: yes
   vars:
@@ -7,6 +7,8 @@
     reflector_ip: "your.server.ip"  # Replace with your server IP
     ssl_email: "admin@your.domain.name"  # Replace with your email for SSL cert
     xlx_number: "999"  # Replace with your reflector number
+    dmr_id: "1234567"  # Replace with your DMR ID
+    bm_master: "3102"  # Replace with your Brandmeister master server
 
   tasks:
     - name: Update and upgrade system
@@ -35,7 +37,7 @@
       args:
         chdir: "/opt/Multi-Reflector-Installer"
 
-    - name: Configure XLX Reflector
+    - name: Configure XLX Reflector for D-STAR
       copy:
         dest: "/var/www/xlxd/pgs/config.inc.php"
         content: |
@@ -46,6 +48,8 @@
           $PageOptions['CallingHome']['Active'] = true;
           $PageOptions['CallingHome']['MyDashBoardURL'] = 'https://{{ fqdn }}';
           $PageOptions['CallingHome']['OverrideIPAddress'] = '{{ reflector_ip }}';
+          $PageOptions['CallingHome']['Country'] = 'USA';
+          $PageOptions['CallingHome']['Comment'] = 'D-STAR Reflector';
           ?>
 
     - name: Configure YSF Reflector
@@ -57,11 +61,63 @@
           define("YSFReflectorDesc", "Multi-Mode Reflector");
           ?>
 
-    - name: Set up firewall rules
+    - name: Configure YSF2DMR Bridge
+      copy:
+        dest: "/ysf2dmr/YSF2DMR.ini"
+        content: |
+          [Info]
+          RXFrequency=445800000
+          TXFrequency=445800000
+          Power=1
+          Latitude=38.000
+          Longitude=-120.000
+          Height=0
+          Location="Your Location"
+          Description="Multi-Mode Reflector"
+          URL="https://{{ fqdn }}"
+
+          [YSF Network]
+          Callsign=YOURCALLSIGN
+          Suffix=ND
+          DstAddress=127.0.0.1
+          DstPort=42000
+          LocalAddress=127.0.0.1
+          LocalPort=42013
+          EnableWiresX=1
+          RemoteGateway=0
+          HangTime=1000
+          Daemon=0
+
+          [DMR Network]
+          Id={{ dmr_id }}
+          StartupDstId=4001
+          Address={{ bm_master }}.repeater.net
+          Port=62030
+          Password=passw0rd
+          Debug=0
+
+          [DMR Id Lookup]
+          File=/ysf2dmr/DMRIds.dat
+          Time=24
+
+          [Log]
+          DisplayLevel=1
+          FileLevel=1
+          FilePath=.
+          FileRoot=YSF2DMR
+
+    - name: Link D-STAR and AMBE transcoding
+      copy:
+        dest: "/etc/init.d/xlxd"
+        content: |
+          ARGUMENTS="XLX{{ xlx_number }} {{ reflector_ip }} 127.0.0.1"
+        mode: "0755"
+
+    - name: Setup firewall rules
       ufw:
         rule: allow
-        port: "{{ item }}"
-        proto: "{{ proto }}"
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
       with_items:
         - { port: 22, proto: tcp }
         - { port: 80, proto: tcp }
@@ -88,3 +144,18 @@
       with_items:
         - nginx
         - ysfreflector
+        - xlxd
+
+    - name: Assert XLX Reflector service is running
+      assert:
+        that:
+          - "xlxd_service_status == 'running'"
+        vars:
+          xlxd_service_status: "{{ ansible_facts.services['xlxd.service'].state }}"
+
+    - name: Assert YSF Reflector service is running
+      assert:
+        that:
+          - "ysfreflector_service_status == 'running'"
+        vars:
+          ysfreflector_service_status: "{{ ansible_facts.services['ysfreflector.service'].state }}"
