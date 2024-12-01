@@ -44,6 +44,6 @@ Ensure the following ports are allowed in your firewall:
 1. Clone or copy this repository to your Ansible controller machine.
 2. Update the inventory file with the target server's details.
 3. Run the playbook:
-   ```bash
-   ansible-playbook -i inventory reflector_setup.yml
+```bash
+   ansible-playbook -i inventory build-reflector.yml
 ```
