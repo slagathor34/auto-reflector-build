@@ -1,0 +1,90 @@
+---
+- name: Setup Multi-Mode Digital Voice Reflector
+  hosts: all
+  become: yes
+  vars:
+    fqdn: "your.domain.name"  # Replace with your FQDN
+    reflector_ip: "your.server.ip"  # Replace with your server IP
+    ssl_email: "admin@your.domain.name"  # Replace with your email for SSL cert
+    xlx_number: "999"  # Replace with your reflector number
+
+  tasks:
+    - name: Update and upgrade system
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Install necessary packages
+      apt:
+        name:
+          - nginx
+          - python-certbot-nginx
+          - git
+          - build-essential
+          - libftdi1-dev
+          - wget
+        state: present
+
+    - name: Clone Multi-Reflector Installer
+      git:
+        repo: "https://github.com/n5amd/Multi-Reflector-Installer"
+        dest: "/opt/Multi-Reflector-Installer"
+
+    - name: Run Multi-Reflector Installer
+      command: "./Multi-Reflector-Installer.sh"
+      args:
+        chdir: "/opt/Multi-Reflector-Installer"
+
+    - name: Configure XLX Reflector
+      copy:
+        dest: "/var/www/xlxd/pgs/config.inc.php"
+        content: |
+          <?php
+          $PageOptions = array();
+          $PageOptions['ContactEmail'] = '{{ ssl_email }}';
+          $PageOptions['DashboardVersion'] = '2.4.0';
+          $PageOptions['CallingHome']['Active'] = true;
+          $PageOptions['CallingHome']['MyDashBoardURL'] = 'https://{{ fqdn }}';
+          $PageOptions['CallingHome']['OverrideIPAddress'] = '{{ reflector_ip }}';
+          ?>
+
+    - name: Configure YSF Reflector
+      copy:
+        dest: "/var/www/ysf/config/config.php"
+        content: |
+          <?php
+          define("YSFReflectorName", "{{ fqdn }}");
+          define("YSFReflectorDesc", "Multi-Mode Reflector");
+          ?>
+
+    - name: Set up firewall rules
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: "{{ proto }}"
+      with_items:
+        - { port: 22, proto: tcp }
+        - { port: 80, proto: tcp }
+        - { port: 443, proto: tcp }
+        - { port: 10001, proto: udp }
+        - { port: 10100:10199, proto: udp }
+        - { port: 30001, proto: udp }
+        - { port: 20001, proto: udp }
+        - { port: 30051, proto: udp }
+        - { port: 62030, proto: udp }
+        - { port: 8880, proto: udp }
+        - { port: 42000, proto: udp }
+
+    - name: Obtain SSL certificate
+      command: >
+        certbot --nginx -d {{ fqdn }}
+        --email {{ ssl_email }}
+        --non-interactive --agree-tos
+
+    - name: Restart services
+      service:
+        name: "{{ item }}"
+        state: restarted
+      with_items:
+        - nginx
+        - ysfreflector
